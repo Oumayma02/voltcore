@@ -107,11 +107,7 @@ async function getBuildStatus(buildNumber) {
   const building = d.building;
   const result   = d.result;
 
-  let ip = null;
-
-  if (!building && result === 'SUCCESS') {
-    ip = await extractIpFromLog(buildNumber);
-  }
+  const ip = await extractIpFromLog(buildNumber);
 
   return {
     building,
@@ -131,14 +127,14 @@ async function extractIpFromLog(buildNumber) {
     const log = r.body;
 
     // ✅ 1. Flexible match (works always)
-    let match = log.match(/IP:\s*(192\.168\.\d+\.\d+)/);
+    let match = log.match(/\bIP:\s*(192\.168\.\d+\.\d+)/);
 
     // ✅ 2. Fallback: any 192.168.x.x except Proxmox host
     if (!match) {
       const all = [...log.matchAll(/192\.168\.\d+\.\d+/g)];
       const filtered = all
         .map(m => m[0])
-        .filter(ip => ip !== '192.168.0.143');
+        .filter(ip => ip !== '192.168.0.143' && ip !== '192.168.1.126');
 
       if (filtered.length) {
         return filtered[filtered.length - 1];

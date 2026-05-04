@@ -44,16 +44,17 @@ function pveRequest(method, path, body = null) {
           const json = JSON.parse(data);
 
           if (res.statusCode >= 400) {
-            return reject(new Error(
-              json.errors
-                ? JSON.stringify(json.errors)
-                : `HTTP ${res.statusCode}`
-            ));
+            const message = json.message || json.error || (json.errors ? JSON.stringify(json.errors) : `HTTP ${res.statusCode}`);
+            const error = new Error(message);
+            error.statusCode = res.statusCode;
+            error.proxmoxBody = json;
+            return reject(error);
           }
 
           return resolve(json.data ?? json);
 
         } catch (err) {
+          if (err.statusCode) return reject(err);
           // ✅ non-JSON but success
           if (res.statusCode < 400) {
             return resolve({ success: true, raw: data });
@@ -135,6 +136,14 @@ async function deleteVm(vmId) {
   return waitForTask(task);
 }
 
+function isMissingVmError(err) {
+  const message = String(err && err.message || '').toLowerCase();
+  return message.includes('does not exist')
+    || message.includes('configuration file')
+    || message.includes('not found')
+    || message.includes('404');
+}
+
 // ─────────────────────────────────────────────
 // VM Info
 // ─────────────────────────────────────────────
@@ -165,5 +174,6 @@ module.exports = {
   deleteVm,
   getVmStatus,
   getVmMetrics,
-  listVms
+  listVms,
+  isMissingVmError
 };

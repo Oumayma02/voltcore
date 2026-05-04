@@ -22,6 +22,10 @@ function clampNumber(value, min, max, fallback) {
   return Math.min(max, Math.max(min, Number.isFinite(n) ? n : fallback));
 }
 
+function vmIpFromId(vmId) {
+  return `192.168.1.${100 + (Number(vmId) % 100)}`;
+}
+
 async function findAuthorizedVm(req, vmId) {
   const vm = await Vm.findOne({ vmId: Number(vmId) });
   if (!vm) {
@@ -46,6 +50,7 @@ router.post('/deploy', authRequired, validateDeploy, async (req, res) => {
     const safeRamMb = clampNumber(ramMb, 512, 1024, 1024);
     const safeDiskGb = clampNumber(diskGb, 20, 40, 40);
     const vmId = Math.floor(7000 + Math.random() * 1999);
+    const expectedIp = vmIpFromId(vmId);
     const { buildUrl, buildNumber } = await jenkins.triggerBuild({
       VM_NAME: vmName, VM_ID: String(vmId), CLIENT_ID: clientId,
       CLIENT_EMAIL: clientEmail, CLIENT_SSH_PUBKEY: clientSshPubkey,
@@ -64,10 +69,11 @@ router.post('/deploy', authRequired, validateDeploy, async (req, res) => {
       cpuCores: safeCpuCores,
       ramMb: safeRamMb,
       diskGb: safeDiskGb,
+      ip: expectedIp,
       buildUrl,
       buildNumber
     });
-    res.status(202).json({ message: 'VM deployment triggered', vmId, vmName, buildUrl, buildNumber, status: 'provisioning', vm });
+    res.status(202).json({ message: 'VM deployment triggered', vmId, vmName, ip: expectedIp, buildUrl, buildNumber, status: 'provisioning', vm });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
@@ -95,6 +101,7 @@ router.get('/status/:buildNumber', async (req, res) => {
       vm.lastStatusCheckedAt = new Date();
       if (!status.building) vm.status = status.status === 'SUCCESS' ? 'running' : 'failed';
       if (status.ip) vm.ip = status.ip;
+      else if (!vm.ip) vm.ip = vmIpFromId(vm.vmId);
       await vm.save();
     }
     res.json(status);
@@ -133,11 +140,11 @@ router.post('/destroy', authRequired, async (req, res) => {
   try {
     await findAuthorizedVm(req, vmId);
     await proxmox.deleteVm(vmId);
-    await Vm.findOneAndUpdate({ vmId: Number(vmId) }, { status: 'deleted', deletedAt: new Date() });
+    await Vm.deleteOne({ vmId: Number(vmId) });
     res.json({ message: `VM ${vmId} deleted`, vmId, status: 'deleted' });
   } catch (err) {
-    if (err.message.includes('does not exist') || err.message.includes('404')) {
-      await Vm.findOneAndUpdate({ vmId: Number(vmId) }, { status: 'deleted', deletedAt: new Date() });
+    if (proxmox.isMissingVmError(err)) {
+      await Vm.deleteOne({ vmId: Number(vmId) });
       return res.json({ message: `VM ${vmId} already gone`, vmId, status: 'deleted' });
     }
     res.status(err.statusCode || 500).json({ error: err.message });
