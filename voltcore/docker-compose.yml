@@ -1,0 +1,72 @@
+﻿version: '3.8'
+
+services:
+
+  mongo:
+    image: mongo:7
+    container_name: voltcore-mongo
+    restart: unless-stopped
+    privileged: true
+    ports:
+      - "27017:27017"
+    volumes:
+      - /opt/voltcore/mongodb:/data/db
+
+  minio:
+    image: minio/minio:latest
+    container_name: voltcore-minio
+    restart: unless-stopped
+    privileged: true
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    environment:
+      MINIO_ROOT_USER: "${MINIO_ROOT_USER:-voltcore}"
+      MINIO_ROOT_PASSWORD: "${MINIO_ROOT_PASSWORD:-change-me}"
+    volumes:
+      - /opt/voltcore/minio:/data
+    command: server /data --console-address ":9001"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  jenkins:
+    image: jenkins/jenkins:lts
+    container_name: voltcore-jenkins
+    restart: unless-stopped
+    ports:
+      - "8081:8080"
+      - "50001:50000"
+    volumes:
+      - /opt/voltcore/jenkins:/var/jenkins_home
+      - /opt/voltcore/terraform:/opt/voltcore/terraform
+    environment:
+      - JAVA_OPTS=-Xmx512m -Xms256m -Djenkins.install.runSetupWizard=false
+    user: root
+    profiles:
+      - jenkins
+  api:
+    build: ./api
+    container_name: voltcore-api
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./api:/app
+      - ./frontend/dist:/frontend:ro
+    environment:
+      - PORT=3000
+      - FRONTEND_DIR=/frontend
+      - MONGO_URI=${MONGO_URI:-mongodb://mongo:27017/voltcore}
+      - JWT_SECRET=${JWT_SECRET:-change-me}
+      - JENKINS_URL=${JENKINS_URL:-http://192.168.0.143:8080}
+      - JENKINS_USER=${JENKINS_USER:-your-jenkins-user}
+      - JENKINS_TOKEN=${JENKINS_TOKEN:-your-jenkins-api-token}
+      - JENKINS_JOB=${JENKINS_JOB:-voltcore-vm-provision}
+      - PROXMOX_URL=${PROXMOX_URL:-https://192.168.0.143:8006}
+      - PROXMOX_TOKEN=${PROXMOX_TOKEN:-terraform@pve!voltcore=your-proxmox-token}
+      - PROXMOX_NODE=${PROXMOX_NODE:-pve}
+    depends_on:
+      - mongo
