@@ -1,5 +1,6 @@
 // api/services/jenkins.js
 const http = require('http');
+const https = require('https');
 
 const JENKINS_URL   = process.env.JENKINS_URL  || 'http://192.168.0.143:8080';
 const JENKINS_USER  = process.env.JENKINS_USER || 'your-jenkins-user';
@@ -12,9 +13,10 @@ const auth = Buffer.from(`${JENKINS_USER}:${JENKINS_TOKEN}`).toString('base64');
 function jenkinsFetch(path, opts = {}) {
   return new Promise((resolve, reject) => {
     const url = new URL(JENKINS_URL + path);
+    const transport = url.protocol === 'https:' ? https : http;
     const options = {
       hostname: url.hostname,
-      port:     url.port || 8080,
+      port:     url.port || (url.protocol === 'https:' ? 443 : 80),
       path:     url.pathname + (url.search || ''),
       method:   opts.method || 'GET',
       headers:  {
@@ -24,7 +26,7 @@ function jenkinsFetch(path, opts = {}) {
       }
     };
 
-    const req = http.request(options, res => {
+    const req = transport.request(options, res => {
       let data = '';
       res.on('data', c => data += c);
       res.on('end', () => resolve({ status: res.statusCode, headers: res.headers, body: data }));
@@ -39,6 +41,8 @@ function jenkinsFetch(path, opts = {}) {
 // ── Get Jenkins crumb (CSRF token) ───────────────────────────
 async function getCrumb() {
   const r = await jenkinsFetch('/crumbIssuer/api/json');
+  if (r.status === 404) return null;
+  if (r.status >= 400) throw new Error(`Jenkins crumb failed: HTTP ${r.status} ${r.body.slice(0, 180)}`);
   const d = JSON.parse(r.body);
   const cookie = Array.isArray(r.headers['set-cookie'])
     ? r.headers['set-cookie'].map(c => c.split(';')[0]).join('; ')
@@ -60,8 +64,8 @@ async function triggerBuild(params) {
       method: 'POST',
       body,
       headers: {
-        [crumb.field]: crumb.value,
-        ...(crumb.cookie ? { Cookie: crumb.cookie } : {})
+        ...(crumb ? { [crumb.field]: crumb.value } : {}),
+        ...(crumb?.cookie ? { Cookie: crumb.cookie } : {})
       }
     }
   );
@@ -102,6 +106,7 @@ async function pollQueue(queueUrl, retries = 15) {
 async function getBuildStatus(buildNumber) {
   const path = `/job/${JOB_NAME}/${buildNumber}/api/json`;
   const r = await jenkinsFetch(path);
+  if (r.status >= 400) throw new Error(`Jenkins status failed: HTTP ${r.status} ${r.body.slice(0, 180)}`);
   const d = JSON.parse(r.body);
 
   const building = d.building;

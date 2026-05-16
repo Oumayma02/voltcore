@@ -3,6 +3,7 @@ const https = require('https');
 const PROXMOX_URL   = process.env.PROXMOX_URL   || 'https://192.168.0.143:8006';
 const PROXMOX_TOKEN = process.env.PROXMOX_TOKEN || ''; // format: user@realm!tokenid=secret
 const PROXMOX_NODE  = process.env.PROXMOX_NODE  || 'pve';
+const PROXMOX_DEBUG = process.env.PROXMOX_DEBUG === 'true';
 
 // ─────────────────────────────────────────────
 // Generic Proxmox request (FIXED)
@@ -29,10 +30,12 @@ function pveRequest(method, path, body = null) {
       res.on('data', chunk => data += chunk);
 
       res.on('end', () => {
-        console.log("----- PROXMOX RAW RESPONSE -----");
-        console.log("STATUS:", res.statusCode);
-        console.log("BODY:", data);
-        console.log("--------------------------------");
+        if (PROXMOX_DEBUG) {
+          console.log("----- PROXMOX RAW RESPONSE -----");
+          console.log("STATUS:", res.statusCode);
+          console.log("BODY:", data.slice(0, 2000));
+          console.log("--------------------------------");
+        }
 
         try {
           // ✅ empty response = success

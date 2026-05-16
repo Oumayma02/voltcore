@@ -12,6 +12,9 @@ const vmSchema = new mongoose.Schema({
   ramMb: { type: Number, default: 2048 },
   diskGb: { type: Number, default: 40 },
   ip: { type: String, default: null },
+  clientSshPubkey: { type: String, default: null },
+  leaseDays: { type: Number, default: 30 },
+  expiresAt: { type: Date, default: null },
   buildUrl: { type: String, default: null },
   buildNumber: { type: Number, default: null },
   lastStatusCheckedAt: { type: Date, default: null }

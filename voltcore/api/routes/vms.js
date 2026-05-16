@@ -23,7 +23,13 @@ function clampNumber(value, min, max, fallback) {
 }
 
 function vmIpFromId(vmId) {
-  return `192.168.1.${100 + (Number(vmId) % 100)}`;
+  return `192.168.0.${100 + (Number(vmId) % 100)}`;
+}
+
+function expirationFromLease(days) {
+  const leaseDays = clampNumber(days, 1, 365, 30);
+  const expiresAt = new Date(Date.now() + leaseDays * 24 * 60 * 60 * 1000);
+  return { leaseDays, expiresAt };
 }
 
 async function findAuthorizedVm(req, vmId) {
@@ -44,13 +50,16 @@ async function findAuthorizedVm(req, vmId) {
 // Deploy
 router.post('/deploy', authRequired, validateDeploy, async (req, res) => {
   try {
-    const { vmName, clientId, clientEmail, clientSshPubkey, plan, os, cpuCores, ramMb, diskGb } = req.body;
+    const { vmName, clientSshPubkey, plan, os, cpuCores, ramMb, diskGb, leaseDays } = req.body;
+    const clientId = req.user._id.toString();
+    const clientEmail = req.user.email;
     const tfPlan = terraformPlan(plan || req.user.plan);
-    const safeCpuCores = clampNumber(cpuCores, 1, 2, 1);
-    const safeRamMb = clampNumber(ramMb, 512, 1024, 1024);
-    const safeDiskGb = clampNumber(diskGb, 20, 40, 40);
+    const safeCpuCores = clampNumber(cpuCores, 1, 16, 1);
+    const safeRamMb = clampNumber(ramMb, 512, 32768, 1024);
+    const safeDiskGb = clampNumber(diskGb, 10, 1024, 40);
     const vmId = Math.floor(7000 + Math.random() * 1999);
     const expectedIp = vmIpFromId(vmId);
+    const lease = expirationFromLease(leaseDays);
     const { buildUrl, buildNumber } = await jenkins.triggerBuild({
       VM_NAME: vmName, VM_ID: String(vmId), CLIENT_ID: clientId,
       CLIENT_EMAIL: clientEmail, CLIENT_SSH_PUBKEY: clientSshPubkey,
@@ -70,10 +79,13 @@ router.post('/deploy', authRequired, validateDeploy, async (req, res) => {
       ramMb: safeRamMb,
       diskGb: safeDiskGb,
       ip: expectedIp,
+      clientSshPubkey,
+      leaseDays: lease.leaseDays,
+      expiresAt: lease.expiresAt,
       buildUrl,
       buildNumber
     });
-    res.status(202).json({ message: 'VM deployment triggered', vmId, vmName, ip: expectedIp, buildUrl, buildNumber, status: 'provisioning', vm });
+    res.status(202).json({ message: 'VM deployment triggered', vmId, vmName, ip: expectedIp, leaseDays: lease.leaseDays, expiresAt: lease.expiresAt, buildUrl, buildNumber, status: 'provisioning', vm });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
@@ -93,10 +105,14 @@ router.get('/all', authRequired, adminRequired, async (req, res) => {
 });
 
 // Jenkins build status + IP
-router.get('/status/:buildNumber', async (req, res) => {
+router.get('/status/:buildNumber', authRequired, async (req, res) => {
   try {
-    const status = await jenkins.getBuildStatus(req.params.buildNumber);
     const vm = await Vm.findOne({ buildNumber: Number(req.params.buildNumber) });
+    if (!vm) return res.status(404).json({ error: 'VM build not found' });
+    if (req.user.role !== 'admin' && vm.user.toString() !== req.user._id.toString()) {
+      return res.status(403).json({ error: 'Not allowed to inspect this build' });
+    }
+    const status = await jenkins.getBuildStatus(req.params.buildNumber);
     if (vm) {
       vm.lastStatusCheckedAt = new Date();
       if (!status.building) vm.status = status.status === 'SUCCESS' ? 'running' : 'failed';
@@ -138,10 +154,27 @@ router.post('/destroy', authRequired, async (req, res) => {
   const { vmId, vmName } = req.body;
   if (!vmId) return res.status(400).json({ error: 'vmId required' });
   try {
-    await findAuthorizedVm(req, vmId);
-    await proxmox.deleteVm(vmId);
+    const vm = await findAuthorizedVm(req, vmId);
+    let destroyBuild = null;
+    if (vm.clientSshPubkey) {
+      destroyBuild = await jenkins.triggerBuild({
+        VM_NAME: vm.name,
+        VM_ID: String(vm.vmId),
+        CLIENT_ID: vm.user.toString(),
+        CLIENT_EMAIL: vm.userEmail,
+        CLIENT_SSH_PUBKEY: vm.clientSshPubkey,
+        PLAN: terraformPlan(vm.plan),
+        OS: vm.os || 'ubuntu-22.04',
+        CPU_CORES: String(vm.cpuCores || 1),
+        RAM_MB: String(vm.ramMb || 1024),
+        DISK_GB: String(vm.diskGb || 40),
+        ACTION: 'destroy'
+      });
+    } else {
+      await proxmox.deleteVm(vmId);
+    }
     await Vm.deleteOne({ vmId: Number(vmId) });
-    res.json({ message: `VM ${vmId} deleted`, vmId, status: 'deleted' });
+    res.json({ message: `VM ${vmId} deletion triggered`, vmId, status: 'deleted', destroyBuild });
   } catch (err) {
     if (proxmox.isMissingVmError(err)) {
       await Vm.deleteOne({ vmId: Number(vmId) });

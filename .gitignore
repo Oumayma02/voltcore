@@ -10,7 +10,9 @@ node_modules/
 *.zip
 
 voltcore/api/.env
-voltcore/jenkins/
+voltcore/jenkins/*
+!voltcore/jenkins/
+!voltcore/jenkins/Jenkinsfile
 voltcore/mongodb/
 voltcore/minio/
 voltcore/secrets/
