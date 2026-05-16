@@ -5,6 +5,7 @@ const proxmox = require('../services/proxmox');
 const { validateDeploy } = require('../middleware/validate');
 const { authRequired, adminRequired } = require('../middleware/auth');
 const Vm = require('../models/Vm');
+const { notify } = require('../services/notifications');
 
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
@@ -24,6 +25,11 @@ function clampNumber(value, min, max, fallback) {
 
 function vmIpFromId(vmId) {
   return `192.168.0.${100 + (Number(vmId) % 100)}`;
+}
+
+function secondsUntil(date) {
+  if (!date) return null;
+  return Math.max(0, Math.round((new Date(date).getTime() - Date.now()) / 1000));
 }
 
 function expirationFromLease(days) {
@@ -85,6 +91,14 @@ router.post('/deploy', authRequired, validateDeploy, async (req, res) => {
       buildUrl,
       buildNumber
     });
+    await notify({
+      user: req.user._id,
+      vm: vm._id,
+      vmId,
+      type: 'info',
+      title: 'VM deployment queued',
+      detail: `${vmName} is being provisioned through Jenkins.`
+    });
     res.status(202).json({ message: 'VM deployment triggered', vmId, vmName, ip: expectedIp, leaseDays: lease.leaseDays, expiresAt: lease.expiresAt, buildUrl, buildNumber, status: 'provisioning', vm });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
@@ -114,11 +128,22 @@ router.get('/status/:buildNumber', authRequired, async (req, res) => {
     }
     const status = await jenkins.getBuildStatus(req.params.buildNumber);
     if (vm) {
+      const previous = vm.status;
       vm.lastStatusCheckedAt = new Date();
       if (!status.building) vm.status = status.status === 'SUCCESS' ? 'running' : 'failed';
       if (status.ip) vm.ip = status.ip;
       else if (!vm.ip) vm.ip = vmIpFromId(vm.vmId);
       await vm.save();
+      if (!status.building && previous === 'provisioning') {
+        await notify({
+          user: vm.user,
+          vm: vm._id,
+          vmId: vm.vmId,
+          type: vm.status === 'running' ? 'success' : 'error',
+          title: vm.status === 'running' ? 'VM ready' : 'VM provisioning failed',
+          detail: vm.status === 'running' ? `${vm.name} is ready at ${vm.ip}.` : `${vm.name} finished with ${status.status}.`
+        });
+      }
     }
     res.json(status);
   }
@@ -132,7 +157,8 @@ router.post('/stop', authRequired, async (req, res) => {
   try {
     await findAuthorizedVm(req, vmId);
     await proxmox.stopVm(vmId);
-    const vm = await Vm.findOneAndUpdate({ vmId: Number(vmId) }, { status: 'stopped' }, { new: true });
+    const vm = await Vm.findOneAndUpdate({ vmId: Number(vmId) }, { status: 'stopped', lastActivityAt: new Date() }, { new: true });
+    await notify({ user: vm.user, vm: vm._id, vmId: vm.vmId, type: 'info', title: 'VM stopped', detail: `${vm.name} was stopped.` });
     res.json({ message: `VM ${vmId} stopped`, vmId, status: 'stopped', vm });
   } catch (err) { res.status(err.statusCode || 500).json({ error: err.message }); }
 });
@@ -144,7 +170,8 @@ router.post('/start', authRequired, async (req, res) => {
   try {
     await findAuthorizedVm(req, vmId);
     await proxmox.startVm(vmId);
-    const vm = await Vm.findOneAndUpdate({ vmId: Number(vmId) }, { status: 'running' }, { new: true });
+    const vm = await Vm.findOneAndUpdate({ vmId: Number(vmId) }, { status: 'running', lastActivityAt: new Date(), idleNoticeSentAt: null }, { new: true });
+    await notify({ user: vm.user, vm: vm._id, vmId: vm.vmId, type: 'success', title: 'VM started', detail: `${vm.name} is running.` });
     res.json({ message: `VM ${vmId} started`, vmId, status: 'running', vm });
   } catch (err) { res.status(err.statusCode || 500).json({ error: err.message }); }
 });
@@ -173,6 +200,7 @@ router.post('/destroy', authRequired, async (req, res) => {
     } else {
       await proxmox.deleteVm(vmId);
     }
+    await notify({ user: vm.user, vm: vm._id, vmId: vm.vmId, type: 'info', title: 'VM deleted', detail: `${vm.name} deletion was triggered.` });
     await Vm.deleteOne({ vmId: Number(vmId) });
     res.json({ message: `VM ${vmId} deletion triggered`, vmId, status: 'deleted', destroyBuild });
   } catch (err) {
@@ -191,9 +219,10 @@ router.get('/:vmId/status', authRequired, async (req, res) => {
     const d = await proxmox.getVmStatus(req.params.vmId);
     await Vm.findOneAndUpdate(
       { vmId: Number(req.params.vmId) },
-      { status: d.status, lastStatusCheckedAt: new Date() }
+      { status: d.status, lastStatusCheckedAt: new Date(), lastActivityAt: new Date() }
     );
-    res.json({ vmId: req.params.vmId, status: d.status, cpu: Math.round((d.cpu||0)*100), mem: d.mem, maxmem: d.maxmem, uptime: d.uptime });
+    const vm = await Vm.findOne({ vmId: Number(req.params.vmId) });
+    res.json({ vmId: req.params.vmId, status: d.status, cpu: Math.round((d.cpu||0)*100), mem: d.mem, maxmem: d.maxmem, uptime: d.uptime, expiresAt: vm?.expiresAt, secondsRemaining: secondsUntil(vm?.expiresAt) });
   } catch (err) { res.status(err.statusCode || 500).json({ error: err.message }); }
 });
 

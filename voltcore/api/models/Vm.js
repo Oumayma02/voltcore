@@ -17,7 +17,10 @@ const vmSchema = new mongoose.Schema({
   expiresAt: { type: Date, default: null },
   buildUrl: { type: String, default: null },
   buildNumber: { type: Number, default: null },
-  lastStatusCheckedAt: { type: Date, default: null }
+  lastStatusCheckedAt: { type: Date, default: null },
+  lastActivityAt: { type: Date, default: null },
+  expirationNoticeSentAt: { type: Date, default: null },
+  idleNoticeSentAt: { type: Date, default: null }
 }, { timestamps: true });
 
 module.exports = mongoose.model('Vm', vmSchema);

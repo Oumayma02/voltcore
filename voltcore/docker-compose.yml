@@ -68,5 +68,13 @@ services:
       - PROXMOX_URL=${PROXMOX_URL:-https://192.168.0.143:8006}
       - PROXMOX_TOKEN=${PROXMOX_TOKEN:-terraform@pve!voltcore=your-proxmox-token}
       - PROXMOX_NODE=${PROXMOX_NODE:-pve}
+      - MINIO_HEALTH_URL=${MINIO_HEALTH_URL:-http://192.168.0.143:9000/minio/health/live}
+      - VM_IDLE_MINUTES=${VM_IDLE_MINUTES:-30}
+      - VM_EXPIRY_WARNING_DAYS=${VM_EXPIRY_WARNING_DAYS:-3}
+      - VM_AUTO_DESTROY_EXPIRED=${VM_AUTO_DESTROY_EXPIRED:-false}
+      - VM_SSH_USER=${VM_SSH_USER:-voltcore}
+      - VM_SSH_PRIVATE_KEY=${VM_SSH_PRIVATE_KEY:-}
+      - VM_SSH_PASSWORD=${VM_SSH_PASSWORD:-}
+      - PROXMOX_DEBUG=${PROXMOX_DEBUG:-false}
     depends_on:
       - mongo

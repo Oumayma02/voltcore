@@ -23,14 +23,14 @@ Checked on 2026-05-16 from the Windows host against Proxmox VM `192.168.0.143`.
 - Terraform destroy was not wired through the Jenkins pipeline. Deleting through the API could remove a VM from Proxmox while leaving stale Terraform state in MinIO. A first fix has been added so `ACTION=destroy` creates a destroy plan.
 - API-generated expected VM IPs used `192.168.1.x`, but Terraform provisions `192.168.0.x`. This would display wrong IPs while provisioning. Fixed locally to `192.168.0.x`.
 - API deploy accepted `clientId` and `clientEmail` from the browser. That allowed identity spoofing. Fixed locally to derive both from the JWT user.
-- The integrated WebSocket SSH terminal described in the PFA is not implemented yet. Current UI shows log panels only.
+- The integrated WebSocket SSH terminal is now implemented in the API and exposed from VM details. It still requires `VM_SSH_PRIVATE_KEY` or `VM_SSH_PASSWORD` in the API environment to open real VM shells.
 
 ## Functional Gaps
 
-- Notifications are mostly frontend/local events. The PFA expects persistent and real-time notifications for provisioning success/failure, idle VMs, expiration, start, stop, and deletion.
-- VM expiration is not fully implemented. A first DB field for `leaseDays` and `expiresAt` has been added locally, but background enforcement and UI progress bars still need implementation.
-- Idle VM detection is not implemented as a backend job. The frontend can display activity, but there is no authoritative inactivity detector.
-- Admin infrastructure health cards are still mostly static copy. They should call real API endpoints for Proxmox/Jenkins/MinIO/API status.
+- Notifications are now persisted in MongoDB and loaded by the frontend. Provisioning, lifecycle actions, idle detection, and expiration warnings create backend notifications.
+- VM expiration now stores `leaseDays` / `expiresAt` and is monitored by a backend lifecycle worker. Expired VMs are marked and notified; automatic Proxmox destruction is controlled by `VM_AUTO_DESTROY_EXPIRED`.
+- Idle VM detection now runs in the backend lifecycle worker using `VM_IDLE_MINUTES`.
+- Admin infrastructure health now calls a real API endpoint that checks Proxmox, Jenkins, MinIO, MongoDB, and the API.
 - Subscriptions and payments remain simulated. The PFA describes subscription-aware validity and quotas; only basic plan limits exist in frontend logic.
 - Frontend is a React wrapper around legacy HTML via `dangerouslySetInnerHTML`, so it is hard to maintain and hard to test.
 
@@ -49,6 +49,7 @@ Checked on 2026-05-16 from the Windows host against Proxmox VM `192.168.0.143`.
 - Aligned expected IP calculation with the Proxmox bridge subnet.
 - Hardened Jenkins HTTP/HTTPS handling and CSRF crumb behavior.
 - Updated Jenkinsfile to support `ACTION=destroy` and use the correct Proxmox provider endpoint base URL.
+- Added persistent notifications, backend lifecycle monitoring, admin infrastructure health, and WebSocket SSH terminal support.
 
 ## Next Execution Steps
 
@@ -57,4 +58,4 @@ Checked on 2026-05-16 from the Windows host against Proxmox VM `192.168.0.143`.
 3. Verify Jenkins credentials and Terraform init against MinIO.
 4. Run one real VM apply from the frontend/API.
 5. Confirm VM appears in Proxmox, gets cloud-init SSH key, reports metrics, and can be destroyed through Jenkins without stale Terraform state.
-6. Implement backend persistent notifications and WebSocket terminal.
+6. Configure `VM_SSH_PRIVATE_KEY` or `VM_SSH_PASSWORD` for browser terminal access to provisioned VMs.

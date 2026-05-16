@@ -124,6 +124,19 @@ async function getBuildStatus(buildNumber) {
   };
 }
 
+async function getJobInfo() {
+  const r = await jenkinsFetch(`/job/${JOB_NAME}/api/json`);
+  if (r.status >= 400) throw new Error(`Jenkins job lookup failed: HTTP ${r.status} ${r.body.slice(0, 180)}`);
+  const d = JSON.parse(r.body);
+  return {
+    name: d.name,
+    url: d.url,
+    buildable: d.buildable,
+    color: d.color,
+    lastBuild: d.lastBuild?.number || null
+  };
+}
+
 // ── 🔥 FIXED: Extract IP from Jenkins logs ───────────────────
 async function extractIpFromLog(buildNumber) {
   try {
@@ -159,4 +172,4 @@ function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
-module.exports = { triggerBuild, getBuildStatus };
+module.exports = { triggerBuild, getBuildStatus, getJobInfo };

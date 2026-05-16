@@ -14,6 +14,7 @@ const state = {
   tasks: [],
   notifications: [],
   activities: [],
+  infraHealth: null,
   filters: { search: "", status: "all", os: "all", owner: "all" },
   pendingPage: "dashboard",
   api: { vms: "idle", error: null },
@@ -26,6 +27,7 @@ const state = {
 const graphHistory = new Map();
 const deployLogs = ["[ready] Waiting for deployment request..."];
 const vmLogs = new Map();
+let terminalSocket = null;
 
 function osLabel(os) {
   const labels = { "ubuntu-22.04": "Ubuntu 22.04", "debian-12": "Debian 12" };
@@ -51,8 +53,31 @@ function normalizeVm(vm) {
     plan: vm.plan || state.user?.plan || "Professional",
     buildNumber: vm.buildNumber,
     buildUrl: vm.buildUrl,
-    createdAt: vm.createdAt
+    createdAt: vm.createdAt,
+    expiresAt: vm.expiresAt,
+    secondsRemaining: vm.secondsRemaining
   };
+}
+
+function timeAgo(value) {
+  if (!value) return "Just now";
+  const seconds = Math.max(0, Math.round((Date.now() - new Date(value).getTime()) / 1000));
+  if (seconds < 60) return "Just now";
+  const minutes = Math.round(seconds / 60);
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 48) return `${hours}h ago`;
+  return `${Math.round(hours / 24)}d ago`;
+}
+
+function leaseLabel(vm) {
+  if (!vm.expiresAt) return "No lease set";
+  const seconds = vm.secondsRemaining ?? Math.max(0, Math.round((new Date(vm.expiresAt).getTime() - Date.now()) / 1000));
+  if (seconds <= 0) return "Expired";
+  const days = Math.floor(seconds / 86400);
+  const hours = Math.floor((seconds % 86400) / 3600);
+  if (days > 0) return `${days}d ${hours}h left`;
+  return `${Math.max(1, hours)}h left`;
 }
 
 function saveSession() {
@@ -131,6 +156,17 @@ function addEvent(title, detail, type = "success") {
   renderFeeds();
 }
 
+function normalizeNotification(item) {
+  return {
+    id: item._id || item.id,
+    type: item.type || "info",
+    read: Boolean(item.read),
+    title: item.title,
+    detail: item.detail,
+    time: timeAgo(item.createdAt)
+  };
+}
+
 function openModal(selector) {
   const modal = $(selector);
   if (!modal) return;
@@ -201,6 +237,8 @@ async function login(email, password) {
   showToast(`Signed in as ${state.user.name}.`);
   await loadUsers();
   await loadVms();
+  await loadNotifications();
+  await loadInfraHealth();
   showPage(state.pendingPage);
   startPolling();
 }
@@ -218,6 +256,8 @@ async function register(name, email, password) {
   showToast(`Welcome to VoltCore, ${state.user.name}.`);
   await loadUsers();
   await loadVms();
+  await loadNotifications();
+  await loadInfraHealth();
   showPage(state.pendingPage);
   startPolling();
 }
@@ -226,6 +266,9 @@ function logout() {
   state.token = null;
   state.user = null;
   state.vms = [];
+  state.notifications = [];
+  state.activities = [];
+  state.infraHealth = null;
   localStorage.removeItem(SESSION_KEY);
   if (state.pollTimer) clearInterval(state.pollTimer);
   state.pollTimer = null;
@@ -270,6 +313,29 @@ async function loadVms() {
   renderAll();
 }
 
+async function loadNotifications() {
+  if (!isSignedIn()) return;
+  try {
+    const rows = await apiRequest("/api/notifications");
+    const normalized = rows.map(normalizeNotification);
+    state.notifications = normalized;
+    state.activities = normalized.slice(0, 12);
+  } catch {
+    // Local notification state remains available if the API is temporarily offline.
+  }
+  renderFeeds();
+}
+
+async function loadInfraHealth() {
+  if (!isAdmin()) return;
+  try {
+    state.infraHealth = await apiRequest("/api/infra/health");
+  } catch (err) {
+    state.infraHealth = { error: err.message, services: {} };
+  }
+  renderInfraHealth();
+}
+
 async function loadUsers() {
   if (!isAdmin()) {
     state.users = [];
@@ -289,6 +355,8 @@ async function refreshVmRuntime(vm) {
     vm.status = status.status || vm.status;
     vm.cpuLoad = Number(status.cpu || 0);
     vm.memLoad = status.mem && status.maxmem ? Math.round((status.mem / status.maxmem) * 100) : vm.memLoad;
+    vm.expiresAt = status.expiresAt || vm.expiresAt;
+    vm.secondsRemaining = status.secondsRemaining ?? vm.secondsRemaining;
     if (status.uptime && vm.status === "running") pushVmLog(vm, `uptime ${Math.round(status.uptime / 60)}m`);
   } catch {
     // Proxmox may reject status while Jenkins is still provisioning; keep DB state visible.
@@ -328,6 +396,8 @@ function startPolling() {
   state.pollTimer = setInterval(async () => {
     await pollBuilds();
     await refreshRuntime();
+    await loadNotifications();
+    if (isAdmin()) await loadInfraHealth();
   }, 8000);
 }
 
@@ -441,7 +511,7 @@ function activeVmRow(vm) {
     <div class="active-vm-row" data-open-vm="${vm.id}">
       <div class="active-vm-main">
         <i class="active-vm-icon">${icon}</i>
-        <div><strong>${vm.name}</strong> <span>- ${vm.os}</span></div>
+        <div><strong>${vm.name}</strong> <span>- ${vm.os} - ${leaseLabel(vm)}</span></div>
       </div>
       <b class="status ${statusClass(vm.status)}">${statusLabel(vm.status)}</b>
     </div>
@@ -455,9 +525,10 @@ function vmRow(vm) {
     <div class="studio-row" data-open-vm="${vm.id}">
       <span><strong>${vm.name}</strong><small>${vm.owner}</small></span>
       <b class="status ${statusClass(vm.status)}">${statusLabel(vm.status)}</b>
-      <span>${vm.cpu} vCPU / ${vm.ram} GB RAM / ${vm.disk} GB SSD</span>
+      <span>${vm.cpu} vCPU / ${vm.ram} GB RAM / ${vm.disk} GB SSD<br><small>${leaseLabel(vm)}</small></span>
       <span class="studio-actions">
         <button type="button" data-open-vm="${vm.id}">Details</button>
+        <button type="button" data-action="terminal" data-id="${vm.id}">Terminal</button>
         <button type="button" data-action="start" data-id="${vm.id}" ${canStart ? "" : "disabled"}>Start</button>
         <button class="warn" type="button" data-action="stop" data-id="${vm.id}" ${canStop ? "" : "disabled"}>Stop</button>
         <button class="danger" type="button" data-action="delete" data-id="${vm.id}">Delete</button>
@@ -482,6 +553,27 @@ function renderFeeds() {
   if ($("#notificationHistory")) $("#notificationHistory").innerHTML = state.notifications.map(formatNotice).join("");
   if ($("#activityFeed")) $("#activityFeed").innerHTML = activityHtml;
   if ($("#notificationCount")) $("#notificationCount").textContent = state.notifications.filter((item) => !item.read).length;
+}
+
+function healthBadge(service) {
+  const ok = Boolean(service?.ok);
+  return `<b class="status ${ok ? "on" : "warn"}">${ok ? "Online" : "Action needed"}</b>`;
+}
+
+function renderInfraHealth() {
+  const panel = $("#admin-panel-infrastructure .admin-grid");
+  if (!panel) return;
+  const health = state.infraHealth;
+  if (!health) {
+    panel.innerHTML = `<article class="admin-card reveal"><span>Infrastructure</span><strong>Loading live health...</strong><p>Checking Proxmox, Jenkins, MinIO, MongoDB, and API status.</p></article>`;
+    return;
+  }
+  const services = health.services || {};
+  panel.innerHTML = `
+    <article class="admin-card reveal"><span>Proxmox VE</span><strong>${healthBadge(services.proxmox)}</strong><p>${services.proxmox?.vmCount ?? 0} VMs visible on node pve.</p><div class="tenant-tags"><b>API</b><b>KVM</b><b>vmbr0</b></div></article>
+    <article class="admin-card featured-admin reveal"><span>Automation</span><strong>${healthBadge(services.jenkins)}</strong><ol><li>Job: ${services.jenkins?.job || "voltcore-vm-provision"}</li><li>Buildable: ${services.jenkins?.buildable ? "yes" : "check Jenkins"}</li><li>Branch: codex/voltcore-react-app</li><li>Terraform state via MinIO</li></ol></article>
+    <article class="admin-card reveal"><span>Storage + Database</span><strong>${healthBadge(services.minio)}</strong><p>Mongo records: ${services.mongo?.vmRecords ?? 0} VMs, ${services.mongo?.users ?? 0} users.</p><div class="tenant-tags"><b>MinIO</b><b>MongoDB</b><b>API</b></div></article>
+  `;
 }
 
 function renderTasks() {
@@ -585,6 +677,7 @@ function renderAll() {
   if ($("#vmGraphs")) $("#vmGraphs").innerHTML = vms.length ? vms.slice(0, 2).map(graphCard).join("") : "";
   if ($("#vmGraphsPanel")) $("#vmGraphsPanel").innerHTML = vms.length ? vms.map(graphCard).join("") : "";
   window.VoltCoreAdmin.renderAdmin({ $, state, spend, vmRow });
+  renderInfraHealth();
 
   renderFeeds();
   renderTasks();
@@ -598,6 +691,10 @@ async function updateVm(id, action) {
   const vm = state.vms.find((item) => item.id === Number(id));
   if (!vm) return;
   const endpoint = action === "delete" ? "destroy" : action;
+  if (action === "terminal") {
+    openTerminal(id);
+    return;
+  }
   if (!["start", "stop", "destroy"].includes(endpoint)) {
     showToast("This action is not available in the current backend.");
     return;
@@ -645,7 +742,7 @@ async function openVmDetails(id) {
       <article><span>IP Address</span><strong>${vm.ip}</strong></article>
       <article><span>Operating System</span><strong>${vm.os}</strong></article>
       <article><span>VM ID</span><strong>${vm.id}</strong></article>
-      <article><span>Plan</span><strong>${vm.plan}</strong></article>
+      <article><span>Lease</span><strong>${leaseLabel(vm)}</strong></article>
     `;
   }
   if ($("#vmDetailGraphs")) $("#vmDetailGraphs").innerHTML = graphCard(vm);
@@ -654,9 +751,49 @@ async function openVmDetails(id) {
     $("#vmDetailActions").innerHTML = `
       <button type="button" data-action="start" data-id="${vm.id}">Start</button>
       <button type="button" data-action="stop" data-id="${vm.id}">Stop</button>
+      <button type="button" data-action="terminal" data-id="${vm.id}">Terminal</button>
       <button class="danger" type="button" data-action="delete" data-id="${vm.id}">Delete</button>
     `;
   }
+}
+
+function terminalUrl(vm) {
+  const base = API.replace(/^http/, API.startsWith("https") ? "wss" : "ws");
+  return `${base}/api/terminal?vmId=${encodeURIComponent(vm.id)}&token=${encodeURIComponent(state.token)}`;
+}
+
+function openTerminal(id) {
+  const vm = state.vms.find((item) => item.id === Number(id));
+  if (!vm) return;
+  openVmDetails(id);
+  const panel = $("#vmLogPanel");
+  if (!panel) return;
+  if (terminalSocket) terminalSocket.close();
+  panel.innerHTML = `<div>Connecting terminal to ${vm.name}...</div>`;
+  terminalSocket = new WebSocket(terminalUrl(vm));
+  terminalSocket.addEventListener("message", (event) => {
+    panel.innerHTML += `<div>${String(event.data).replace(/[<>&]/g, (ch) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;" }[ch]))}</div>`;
+    panel.scrollTop = panel.scrollHeight;
+  });
+  terminalSocket.addEventListener("close", () => {
+    panel.innerHTML += `<div>[terminal closed]</div>`;
+  });
+  terminalSocket.addEventListener("error", () => {
+    panel.innerHTML += `<div>[terminal error]</div>`;
+  });
+  if (!panel.dataset.boundInput) {
+    panel.dataset.boundInput = "true";
+    panel.tabIndex = 0;
+    panel.addEventListener("keydown", (event) => {
+      if (!terminalSocket || terminalSocket.readyState !== WebSocket.OPEN) return;
+      if (event.key === "Enter") terminalSocket.send("\n");
+      else if (event.key === "Backspace") terminalSocket.send("\b");
+      else if (event.key.length === 1) terminalSocket.send(event.key);
+      else return;
+      event.preventDefault();
+    });
+  }
+  panel.focus();
 }
 
 function deployCost() {
@@ -730,7 +867,8 @@ async function deployVm(event) {
         plan,
         cpuCores: cpu,
         ramMb: ramGb * 1024,
-        diskGb: disk
+        diskGb: disk,
+        leaseDays: plan === "Starter" ? 7 : 30
       })
     });
     const vm = normalizeVm(data.vm || data);
@@ -840,6 +978,12 @@ function setupEvents() {
   $("#clearNotifications")?.addEventListener("click", () => {
     state.notifications.splice(0);
     renderFeeds();
+    apiRequest("/api/notifications", { method: "DELETE" }).catch(() => {});
+  });
+  $("#markNotificationsRead")?.addEventListener("click", () => {
+    state.notifications.forEach((item) => { item.read = true; });
+    renderFeeds();
+    apiRequest("/api/notifications/read", { method: "POST", body: JSON.stringify({}) }).catch(() => {});
   });
   $("#viewAllActivity")?.addEventListener("click", renderFeeds);
   $("#restartAllBtn")?.addEventListener("click", async () => {
@@ -895,6 +1039,7 @@ function setupEvents() {
   });
   $("#syncAdminBtn")?.addEventListener("click", async () => {
     await loadVms();
+    await loadInfraHealth();
     showToast("Admin VM records refreshed.");
   });
   document.addEventListener("keydown", (event) => {
@@ -942,6 +1087,8 @@ async function initialize() {
       saveSession();
       await loadUsers();
       await loadVms();
+      await loadNotifications();
+      await loadInfraHealth();
       startPolling();
     } catch {
       logout();
