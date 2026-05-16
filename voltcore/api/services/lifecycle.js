@@ -2,7 +2,7 @@ const Vm = require('../models/Vm');
 const { notify } = require('./notifications');
 const proxmox = require('./proxmox');
 
-const IDLE_MINUTES = Number(process.env.VM_IDLE_MINUTES || 30);
+const IDLE_MINUTES = Number(process.env.VM_IDLE_MINUTES || 5);
 const EXPIRY_WARNING_DAYS = Number(process.env.VM_EXPIRY_WARNING_DAYS || 3);
 const AUTO_DESTROY_EXPIRED = process.env.VM_AUTO_DESTROY_EXPIRED === 'true';
 

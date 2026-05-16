@@ -19,11 +19,12 @@ Checked on 2026-05-16 from the Windows host against Proxmox VM `192.168.0.143`.
 
 ## Critical Gaps
 
-- Jenkins port mapping is inconsistent. The repo compose file maps Jenkins as `8081:8080` under a profile, while the VM has Jenkins reachable on host `8080` and the Docker container shows no published ports. Decide whether Jenkins is host-managed or compose-managed, then update `docker-compose.yml`, `.env`, and docs consistently.
-- Terraform destroy was not wired through the Jenkins pipeline. Deleting through the API could remove a VM from Proxmox while leaving stale Terraform state in MinIO. A first fix has been added so `ACTION=destroy` creates a destroy plan.
-- API-generated expected VM IPs used `192.168.1.x`, but Terraform provisions `192.168.0.x`. This would display wrong IPs while provisioning. Fixed locally to `192.168.0.x`.
-- API deploy accepted `clientId` and `clientEmail` from the browser. That allowed identity spoofing. Fixed locally to derive both from the JWT user.
-- The integrated WebSocket SSH terminal is now implemented in the API and exposed from VM details. It still requires `VM_SSH_PRIVATE_KEY` or `VM_SSH_PASSWORD` in the API environment to open real VM shells.
+- Jenkins was configured to load `jenkins/Jenkinsfile` from the repository root, but the repo only had `voltcore/jenkins/Jenkinsfile`. Fixed by adding the root Jenkinsfile and keeping the nested copy aligned.
+- Terraform destroy was not wired through the Jenkins pipeline. Deleting through the API could remove a VM from Proxmox while leaving stale Terraform state in MinIO. Fixed so `ACTION=destroy` creates and applies a destroy plan.
+- API-generated expected VM IPs used `192.168.1.x`, but Terraform provisions `192.168.0.x`. Fixed to `192.168.0.x`.
+- API deploy accepted `clientId` and `clientEmail` from the browser. That allowed identity spoofing. Fixed to derive both from the JWT user.
+- The integrated WebSocket SSH terminal is implemented in the API and exposed from VM details. New VMs receive a platform terminal SSH public key through cloud-init; the API reads the matching private key from `/opt/voltcore/secrets/terminal_ed25519`.
+- Pending IP display is fixed by reading the Proxmox guest agent IP when Jenkins output does not include an address.
 
 ## Functional Gaps
 
@@ -31,16 +32,16 @@ Checked on 2026-05-16 from the Windows host against Proxmox VM `192.168.0.143`.
 - VM expiration now stores `leaseDays` / `expiresAt` and is monitored by a backend lifecycle worker. Expired VMs are marked and notified; automatic Proxmox destruction is controlled by `VM_AUTO_DESTROY_EXPIRED`.
 - Idle VM detection now runs in the backend lifecycle worker using `VM_IDLE_MINUTES`.
 - Admin infrastructure health now calls a real API endpoint that checks Proxmox, Jenkins, MinIO, MongoDB, and the API.
-- Subscriptions and payments remain simulated. The PFA describes subscription-aware validity and quotas; only basic plan limits exist in frontend logic.
+- Subscription upgrades are wired through `PATCH /api/auth/plan`, so signed-in users can move from Starter to Professional or Enterprise and get an account notification.
 - Frontend is a React wrapper around legacy HTML via `dangerouslySetInnerHTML`, so it is hard to maintain and hard to test.
 
 ## Infrastructure Gaps
 
-- Secrets/defaults are unsafe in repo-level compose defaults: `JWT_SECRET=change-me`, MinIO default password, placeholder Jenkins credentials, and placeholder Proxmox token.
+- Secrets/defaults are still placeholders in example compose values and must be replaced in production. Runtime secrets are kept out of Git.
 - Jenkins credentials need to be verified in Jenkins itself: `proxmox-api-token`, `minio-access-key`, and `minio-secret-key`.
 - MinIO Terraform state bucket exists locally, but state consistency must be rechecked after the new destroy flow.
 - The Ubuntu template ID `9100` exists, but its name is `temp-fix-vm`; this should be cleaned up to match the report and Terraform local map.
-- Existing VMs are all stopped at the time of inspection. End-to-end provisioning still needs a real apply/destroy test after Jenkins credentials are confirmed.
+- Existing VMs that were created before terminal-key injection cannot use the platform terminal unless the key is manually inserted or the VM is rebuilt.
 
 ## Local Fixes Started
 
@@ -53,9 +54,7 @@ Checked on 2026-05-16 from the Windows host against Proxmox VM `192.168.0.143`.
 
 ## Next Execution Steps
 
-1. Push the local fixes to the VM or pull them on `/opt/voltcore`.
-2. Rebuild/restart `voltcore-api` and reload the Jenkins job from the updated Jenkinsfile.
-3. Verify Jenkins credentials and Terraform init against MinIO.
-4. Run one real VM apply from the frontend/API.
-5. Confirm VM appears in Proxmox, gets cloud-init SSH key, reports metrics, and can be destroyed through Jenkins without stale Terraform state.
-6. Configure `VM_SSH_PRIVATE_KEY` or `VM_SSH_PASSWORD` for browser terminal access to provisioned VMs.
+1. Push the local fixes to GitHub so Jenkins can load the root `jenkins/Jenkinsfile`.
+2. Run one real VM apply from the frontend/API.
+3. Confirm VM appears in Proxmox, gets the cloud-init terminal SSH key, reports the guest-agent IP, and opens the browser terminal.
+4. Destroy the test VM through the API/Jenkins path to confirm Terraform state cleanup.

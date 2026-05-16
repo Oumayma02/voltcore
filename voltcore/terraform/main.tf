@@ -74,7 +74,7 @@ resource "proxmox_virtual_environment_vm" "client_vm" {
     }
     user_account {
       username = "voltcore"
-      keys     = [var.client_ssh_pubkey]
+      keys     = compact([var.client_ssh_pubkey, var.terminal_ssh_pubkey])
     }
     dns {
       servers = ["1.1.1.1", "8.8.8.8"]

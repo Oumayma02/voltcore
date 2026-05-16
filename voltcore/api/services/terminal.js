@@ -4,6 +4,18 @@ const jwt = require('jsonwebtoken');
 const User = require('../models/User');
 const Vm = require('../models/Vm');
 const { JWT_SECRET } = require('../middleware/auth');
+const fs = require('fs');
+
+function configuredPrivateKey() {
+  if (process.env.VM_SSH_PRIVATE_KEY_FILE) {
+    try {
+      return fs.readFileSync(process.env.VM_SSH_PRIVATE_KEY_FILE, 'utf8');
+    } catch {
+      return null;
+    }
+  }
+  return process.env.VM_SSH_PRIVATE_KEY || process.env.SSH_PRIVATE_KEY || null;
+}
 
 async function userFromRequest(reqUrl) {
   const url = new URL(reqUrl, 'http://localhost');
@@ -35,7 +47,7 @@ function attachTerminalServer(server) {
       const { vm } = await userFromRequest(req.url);
       const host = vm.ip;
       const username = process.env.VM_SSH_USER || 'voltcore';
-      const privateKey = process.env.VM_SSH_PRIVATE_KEY || process.env.SSH_PRIVATE_KEY;
+      const privateKey = configuredPrivateKey();
       const password = process.env.VM_SSH_PASSWORD || process.env.SSH_PASSWORD;
       if (!host || host === 'Pending IP') throw new Error('VM IP is not ready yet');
       if (!privateKey && !password) throw new Error('Configure VM_SSH_PRIVATE_KEY or VM_SSH_PASSWORD on the API');

@@ -27,6 +27,17 @@ function vmIpFromId(vmId) {
   return `192.168.0.${100 + (Number(vmId) % 100)}`;
 }
 
+async function resolveVmIp(vm, statusIp = '') {
+  if (statusIp) return statusIp;
+  try {
+    const agentIp = await proxmox.getVmAgentIp(vm.vmId);
+    if (agentIp) return agentIp;
+  } catch {
+    // Guest agent IP discovery is best-effort while cloud-init is still settling.
+  }
+  return vm.ip || vmIpFromId(vm.vmId);
+}
+
 function secondsUntil(date) {
   if (!date) return null;
   return Math.max(0, Math.round((new Date(date).getTime() - Date.now()) / 1000));
@@ -69,6 +80,7 @@ router.post('/deploy', authRequired, validateDeploy, async (req, res) => {
     const { buildUrl, buildNumber } = await jenkins.triggerBuild({
       VM_NAME: vmName, VM_ID: String(vmId), CLIENT_ID: clientId,
       CLIENT_EMAIL: clientEmail, CLIENT_SSH_PUBKEY: clientSshPubkey,
+      TERMINAL_SSH_PUBKEY: process.env.VM_TERMINAL_PUBLIC_KEY || '',
       PLAN: tfPlan, OS: os || 'ubuntu-22.04',
       CPU_CORES: String(safeCpuCores), RAM_MB: String(safeRamMb),
       DISK_GB: String(safeDiskGb), ACTION: 'apply'
@@ -131,8 +143,8 @@ router.get('/status/:buildNumber', authRequired, async (req, res) => {
       const previous = vm.status;
       vm.lastStatusCheckedAt = new Date();
       if (!status.building) vm.status = status.status === 'SUCCESS' ? 'running' : 'failed';
-      if (status.ip) vm.ip = status.ip;
-      else if (!vm.ip) vm.ip = vmIpFromId(vm.vmId);
+      if (vm.status === 'running') vm.ip = await resolveVmIp(vm, status.ip);
+      else if (status.ip) vm.ip = status.ip;
       await vm.save();
       if (!status.building && previous === 'provisioning') {
         await notify({
@@ -190,6 +202,7 @@ router.post('/destroy', authRequired, async (req, res) => {
         CLIENT_ID: vm.user.toString(),
         CLIENT_EMAIL: vm.userEmail,
         CLIENT_SSH_PUBKEY: vm.clientSshPubkey,
+        TERMINAL_SSH_PUBKEY: process.env.VM_TERMINAL_PUBLIC_KEY || '',
         PLAN: terraformPlan(vm.plan),
         OS: vm.os || 'ubuntu-22.04',
         CPU_CORES: String(vm.cpuCores || 1),
@@ -215,14 +228,14 @@ router.post('/destroy', authRequired, async (req, res) => {
 // Real-time Proxmox status
 router.get('/:vmId/status', authRequired, async (req, res) => {
   try {
-    await findAuthorizedVm(req, req.params.vmId);
+    const vm = await findAuthorizedVm(req, req.params.vmId);
     const d = await proxmox.getVmStatus(req.params.vmId);
+    const ip = await resolveVmIp(vm);
     await Vm.findOneAndUpdate(
       { vmId: Number(req.params.vmId) },
-      { status: d.status, lastStatusCheckedAt: new Date(), lastActivityAt: new Date() }
+      { status: d.status, ip, lastStatusCheckedAt: new Date(), lastActivityAt: new Date() }
     );
-    const vm = await Vm.findOne({ vmId: Number(req.params.vmId) });
-    res.json({ vmId: req.params.vmId, status: d.status, cpu: Math.round((d.cpu||0)*100), mem: d.mem, maxmem: d.maxmem, uptime: d.uptime, expiresAt: vm?.expiresAt, secondsRemaining: secondsUntil(vm?.expiresAt) });
+    res.json({ vmId: req.params.vmId, status: d.status, ip, cpu: Math.round((d.cpu||0)*100), mem: d.mem, maxmem: d.maxmem, uptime: d.uptime, expiresAt: vm?.expiresAt, secondsRemaining: secondsUntil(vm?.expiresAt) });
   } catch (err) { res.status(err.statusCode || 500).json({ error: err.message }); }
 });
 

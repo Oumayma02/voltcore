@@ -165,6 +165,23 @@ async function listVms() {
   return pveRequest('GET', `/nodes/${PROXMOX_NODE}/qemu`);
 }
 
+async function getVmAgentIp(vmId) {
+  const interfaces = await pveRequest('GET', `/nodes/${PROXMOX_NODE}/qemu/${vmId}/agent/network-get-interfaces`);
+  const candidates = [];
+  for (const iface of interfaces?.result || interfaces || []) {
+    for (const item of iface['ip-addresses'] || []) {
+      const ip = item['ip-address'];
+      const usable = item['ip-address-type'] === 'ipv4'
+        && ip
+        && !ip.startsWith('127.')
+        && !ip.startsWith('169.254.')
+        && ip !== '192.168.0.1';
+      if (usable) candidates.push(ip);
+    }
+  }
+  return candidates.find(ip => ip.startsWith('192.168.0.')) || candidates[0] || null;
+}
+
 // ─────────────────────────────────────────────
 function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
@@ -177,6 +194,7 @@ module.exports = {
   deleteVm,
   getVmStatus,
   getVmMetrics,
+  getVmAgentIp,
   listVms,
   isMissingVmError
 };

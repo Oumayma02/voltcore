@@ -32,6 +32,11 @@ variable "client_ssh_pubkey" {
   type = string
 }
 
+variable "terminal_ssh_pubkey" {
+  type    = string
+  default = ""
+}
+
 variable "datastore" {
   type    = string
   default = "local-lvm"

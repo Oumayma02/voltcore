@@ -1,5 +1,3 @@
-﻿version: '3.8'
-
 services:
 
   mongo:
@@ -53,28 +51,14 @@ services:
     restart: unless-stopped
     ports:
       - "3000:3000"
+    env_file:
+      - ./api/.env
     volumes:
       - ./api:/app
+      - /opt/voltcore/secrets:/opt/voltcore/secrets:ro
       - ./frontend/dist:/frontend:ro
     environment:
       - PORT=3000
       - FRONTEND_DIR=/frontend
-      - MONGO_URI=${MONGO_URI:-mongodb://mongo:27017/voltcore}
-      - JWT_SECRET=${JWT_SECRET:-change-me}
-      - JENKINS_URL=${JENKINS_URL:-http://192.168.0.143:8080}
-      - JENKINS_USER=${JENKINS_USER:-your-jenkins-user}
-      - JENKINS_TOKEN=${JENKINS_TOKEN:-your-jenkins-api-token}
-      - JENKINS_JOB=${JENKINS_JOB:-voltcore-vm-provision}
-      - PROXMOX_URL=${PROXMOX_URL:-https://192.168.0.143:8006}
-      - PROXMOX_TOKEN=${PROXMOX_TOKEN:-terraform@pve!voltcore=your-proxmox-token}
-      - PROXMOX_NODE=${PROXMOX_NODE:-pve}
-      - MINIO_HEALTH_URL=${MINIO_HEALTH_URL:-http://192.168.0.143:9000/minio/health/live}
-      - VM_IDLE_MINUTES=${VM_IDLE_MINUTES:-30}
-      - VM_EXPIRY_WARNING_DAYS=${VM_EXPIRY_WARNING_DAYS:-3}
-      - VM_AUTO_DESTROY_EXPIRED=${VM_AUTO_DESTROY_EXPIRED:-false}
-      - VM_SSH_USER=${VM_SSH_USER:-voltcore}
-      - VM_SSH_PRIVATE_KEY=${VM_SSH_PRIVATE_KEY:-}
-      - VM_SSH_PASSWORD=${VM_SSH_PASSWORD:-}
-      - PROXMOX_DEBUG=${PROXMOX_DEBUG:-false}
     depends_on:
       - mongo

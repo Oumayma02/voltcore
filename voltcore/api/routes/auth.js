@@ -3,6 +3,7 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const User = require('../models/User');
 const { authRequired, JWT_SECRET } = require('../middleware/auth');
+const { notify } = require('../services/notifications');
 
 const router = express.Router();
 
@@ -54,6 +55,26 @@ router.post('/login', async (req, res) => {
 
 router.get('/me', authRequired, (req, res) => {
   res.json({ user: req.user.toSafeJSON() });
+});
+
+router.patch('/plan', authRequired, async (req, res) => {
+  try {
+    const allowedPlans = new Set(['Starter', 'Professional', 'Enterprise']);
+    const plan = String(req.body.plan || '').trim();
+    if (!allowedPlans.has(plan)) return res.status(400).json({ error: 'Choose Starter, Professional, or Enterprise' });
+
+    req.user.plan = plan;
+    await req.user.save();
+    await notify({
+      user: req.user._id,
+      type: 'success',
+      title: 'Subscription updated',
+      detail: `${plan} is now active on your account.`
+    });
+    res.json({ user: req.user.toSafeJSON() });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 router.get('/users', authRequired, async (req, res) => {

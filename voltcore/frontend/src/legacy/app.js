@@ -353,6 +353,7 @@ async function refreshVmRuntime(vm) {
   try {
     const status = await apiRequest(`/api/vms/${vm.id}/status`);
     vm.status = status.status || vm.status;
+    vm.ip = status.ip || vm.ip;
     vm.cpuLoad = Number(status.cpu || 0);
     vm.memLoad = status.mem && status.maxmem ? Math.round((status.mem / status.maxmem) * 100) : vm.memLoad;
     vm.expiresAt = status.expiresAt || vm.expiresAt;
@@ -399,6 +400,24 @@ function startPolling() {
     await loadNotifications();
     if (isAdmin()) await loadInfraHealth();
   }, 8000);
+}
+
+async function activateSelectedPlan() {
+  if (!isSignedIn()) {
+    savePreferences();
+    showToast(`${state.selectedPlan.name} selected for new registrations.`);
+    return;
+  }
+  const data = await apiRequest("/api/auth/plan", {
+    method: "PATCH",
+    body: JSON.stringify({ plan: state.selectedPlan.name })
+  });
+  state.user = data.user;
+  saveSession();
+  await loadUsers();
+  await loadNotifications();
+  renderAll();
+  showToast(`${state.selectedPlan.name} is active on your account.`);
 }
 
 async function pollBuilds() {
@@ -991,10 +1010,13 @@ function setupEvents() {
     await Promise.all(stopped.map((vm) => updateVm(vm.id, "start")));
   });
   $("#deployForm")?.addEventListener("submit", deployVm);
-  $("#paymentForm")?.addEventListener("submit", (event) => {
+  $("#paymentForm")?.addEventListener("submit", async (event) => {
     event.preventDefault();
-    savePreferences();
-    showToast(`${state.selectedPlan.name} selected for new registrations.`);
+    try {
+      await activateSelectedPlan();
+    } catch (err) {
+      showToast(`Subscription update failed: ${err.message}`);
+    }
   });
   $("#quickPaymentForm")?.addEventListener("submit", (event) => {
     event.preventDefault();
